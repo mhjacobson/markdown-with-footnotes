@@ -59,6 +59,9 @@ foreach my $char (split //, '\\`*_{}[]()>#+-.!') {
 my %g_urls;
 my %g_titles;
 my %g_html_blocks;
+my %g_footnotes;
+my @g_seen_footnotes;
+my $g_footnote_index = 1;
 
 # Used to track when we're inside an ordered or unordered list
 # (see _ProcessListItems() for details):
@@ -260,12 +263,15 @@ sub Markdown {
 	# Turn block-level HTML blocks into hash entries
 	$text = _HashHTMLBlocks($text);
 
-	# Strip link definitions, store in hashes.
+	# Strip link/footnote definitions, store in hashes.
 	$text = _StripLinkDefinitions($text);
+	$text = _StripFootnoteDefinitions($text);
 
 	$text = _RunBlockGamut($text);
 
 	$text = _UnescapeSpecialChars($text);
+
+	$text = _AppendFootnotes($text);
 
 	return $text . "\n";
 }
@@ -274,14 +280,14 @@ sub Markdown {
 sub _StripLinkDefinitions {
 #
 # Strips link definitions from text, stores the URLs and titles in
-# hash references.
+# hashes.
 #
 	my $text = shift;
 	my $less_than_tab = $g_tab_width - 1;
 
 	# Link defs are in the form: ^[id]: url "optional title"
 	while ($text =~ s{
-						^[ ]{0,$less_than_tab}\[(.+)\]:	# id = $1
+						^[ ]{0,$less_than_tab}\[([^\^].+)\]:	# id = $1
 						  [ \t]*
 						  \n?				# maybe *one* newline
 						  [ \t]*
@@ -304,6 +310,29 @@ sub _StripLinkDefinitions {
 			$g_titles{lc $1} = $3;
 			$g_titles{lc $1} =~ s/"/&quot;/g;
 		}
+	}
+
+	return $text;
+}
+
+
+sub _StripFootnoteDefinitions {
+#
+# Strips footnote definitions from text, stores the IDs and text in
+# hashes.
+#
+	my $text = shift;
+	my $less_than_tab = $g_tab_width - 1;
+
+	# Footnotes are in the form: ^[^id]: text
+	while ($text =~ s{
+						^[ ]{0,$less_than_tab}\[\^(.+)\]\:	# id = $1
+						  [ \t]*
+						  (.*?)				# text = $2
+						  (\n\n|$)			# ends with double newline or EOF
+					}
+					{}mx) {
+		$g_footnotes{lc $1} = $2;			# Footnote IDs are case-insensitive
 	}
 
 	return $text;
@@ -467,6 +496,7 @@ sub _RunSpanGamut {
 	# because ![foo][f] looks like an anchor.
 	$text = _DoImages($text);
 	$text = _DoAnchors($text);
+	$text = _DoFootnotes($text);
 
 	# Make links out of things like `<http://example.com/>`
 	# Must come after _DoAnchors(), because you can use < and >
@@ -512,6 +542,66 @@ sub _EscapeSpecialChars {
 	return $text;
 }
 
+sub _DoFootnotes {
+	my $text = shift;
+
+	$text =~ s{
+		(				# wrap whole match in $1
+			\[\^
+				(.*?)	# id = $2
+			\]
+		)
+	}{
+		my $result;
+		my $whole_match = $1;
+		my $footnote_id = lc $2;
+
+		if (defined $g_footnotes{$footnote_id}) {
+			$result = "<sup id=\"situ-$footnote_id\"><a href=\"#$footnote_id\">[$g_footnote_index]</a></sup>"; # TODO: eep -- escape hash?
+			push @g_seen_footnotes, $footnote_id;
+			$g_footnote_index++;
+		}
+		else {
+			$result = $whole_match;
+		}
+
+		$result;
+	}xsge;
+
+	return $text;
+}
+
+sub _AppendFootnotes {
+	my $text = shift;
+
+	if (scalar @g_seen_footnotes >= 1) {
+		$text .= <<'FOOTNOTE_HEADER';
+<div class="footnotes">
+<hr />
+<ol>
+FOOTNOTE_HEADER
+
+		for (my $i = 0; $i < scalar @g_seen_footnotes; $i++) {
+			my $footnote_id = $g_seen_footnotes[$i];
+			my $footnote_number = $i + 1;
+			my $footnote_text = $g_footnotes{$footnote_id};
+			my $footnote_html = _RunSpanGamut($footnote_text);
+
+			$text .= <<"FOOTNOTE";
+	<li id="$footnote_id">
+	<p>$footnote_html&nbsp;<a href="#situ-$footnote_id" class="footnoteBackLink" title="Jump back to footnote $footnote_number in the text.">&#x21A9;&#xFE0E;</a></p>
+	</li>
+FOOTNOTE
+		}
+
+		$text .= <<'FOOTNOTE_FOOTER';
+</ol>
+</div>
+FOOTNOTE_FOOTER
+	}
+
+	return $text;
+}
 
 sub _DoAnchors {
 #
@@ -561,6 +651,7 @@ sub _DoAnchors {
 		else {
 			$result = $whole_match;
 		}
+
 		$result;
 	}xsge;
 
