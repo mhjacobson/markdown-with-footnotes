@@ -269,9 +269,9 @@ sub Markdown {
 
 	$text = _RunBlockGamut($text);
 
-	$text = _UnescapeSpecialChars($text);
-
 	$text = _AppendFootnotes($text);
+
+	$text = _UnescapeSpecialChars($text);
 
 	return $text . "\n";
 }
